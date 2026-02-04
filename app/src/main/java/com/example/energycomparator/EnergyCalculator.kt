@@ -1,6 +1,7 @@
 package com.example.energycomparator
 
 import kotlin.math.abs
+import kotlin.math.ceil
 
 // 1. DATA MODELS
 data class EnergyProvider(
@@ -10,17 +11,24 @@ data class EnergyProvider(
     val standingCharge: Double
 )
 
-// NEW: The Report for the Investment Decision
 data class SolarInvestmentReport(
     val location: String,
+    // Scenario A: No Solar
     val bestProviderNoSolar: EnergyProvider,
     val annualBillNoSolar: Double,
+    val totalCost20YearsNoSolar: Double, // The "Do Nothing" cost
+
+    // Scenario B: Solar
     val bestProviderWithSolar: EnergyProvider,
-    val annualBillWithSolar: Double, // The utility bill only
-    val annualSolarCost: Double,     // The investment (e.g. €1000/yr)
-    val totalAnnualCostWithSolar: Double, // Bill + Investment
-    val annualNetSavings: Double,    // Positive = Profit, Negative = Loss
-    val isProfitable: Boolean        // The boolean for your UI "Verdict"
+    val annualBillWithSolar: Double,     // The reduced utility bill
+    val solarSystemCost: Double,         // Fixed €5,000
+    val totalCost20YearsWithSolar: Double, // (Bill * 20) + €5,000
+
+    // The Verdict
+    val annualOperationalSavings: Double, // How much lower the bill is per year
+    val breakEvenYears: Double,           // When do you get your money back?
+    val netSavings20Years: Double,        // Final profit after 20 years
+    val isProfitable: Boolean             // True if you break even before year 20
 )
 
 // 2. LOGIC SINGLETON
@@ -51,46 +59,56 @@ object EnergyCalculator {
         return peakSunHours * 365 * systemSizeKw * systemEfficiency
     }
 
-    // NEW: The "ROI" Decision Logic
+    // NEW: 20-Year Horizon Logic
     fun calculateInvestmentLogic(
         usageKwhPerYear: Double,
         latitude: Double,
         locationName: String
     ): SolarInvestmentReport {
 
-        // Scenario 1: NO SOLAR (Status Quo)
-        // We calculate cost based on average monthly usage
+        // 1. SCENARIO A: DO NOTHING (Grid only)
         val avgMonthlyUsage = usageKwhPerYear / 12
         val bestNoSolarQuote = getCheapestQuotes(avgMonthlyUsage).first()
         val annualBillNoSolar = bestNoSolarQuote.second * 12
+        val totalCost20YearsNoSolar = annualBillNoSolar * 20
 
-        // Scenario 2: WITH SOLAR
+        // 2. SCENARIO B: BUY SOLAR (€5,000)
         val annualProduction = calculateAnnualSolarKwh(latitude)
         val monthlyProduction = annualProduction / 12
-
-        // Net usage: We buy less from the grid. (coerceAtLeast(0.0) ensures no negative bills)
         val netMonthlyUsage = (avgMonthlyUsage - monthlyProduction).coerceAtLeast(0.0)
 
         val bestWithSolarQuote = getCheapestQuotes(netMonthlyUsage).first()
-        val annualUtilityBill = bestWithSolarQuote.second * 12
+        val annualBillWithSolar = bestWithSolarQuote.second * 12
 
-        // Investment Cost: €5,000 spread over 5 years = €1,000/year
-        val annualInvestmentCost = 1000.0
-        val totalCostWithSolar = annualUtilityBill + annualInvestmentCost
+        val solarSystemCost = 5000.0
+        // Total cost = The panels + 20 years of reduced bills
+        val totalCost20YearsWithSolar = solarSystemCost + (annualBillWithSolar * 20)
 
-        // The Verdict
-        val savings = annualBillNoSolar - totalCostWithSolar
+        // 3. ANALYSIS
+        val annualOperationalSavings = annualBillNoSolar - annualBillWithSolar
+
+        // Avoid division by zero if savings are 0 or negative
+        val breakEvenYears = if (annualOperationalSavings > 0) {
+            solarSystemCost / annualOperationalSavings
+        } else {
+            999.0 // Never breaks even
+        }
+
+        val netSavings20Years = totalCost20YearsNoSolar - totalCost20YearsWithSolar
 
         return SolarInvestmentReport(
             location = locationName,
             bestProviderNoSolar = bestNoSolarQuote.first,
             annualBillNoSolar = annualBillNoSolar,
+            totalCost20YearsNoSolar = totalCost20YearsNoSolar,
             bestProviderWithSolar = bestWithSolarQuote.first,
-            annualBillWithSolar = annualUtilityBill,
-            annualSolarCost = annualInvestmentCost,
-            totalAnnualCostWithSolar = totalCostWithSolar,
-            annualNetSavings = savings,
-            isProfitable = savings > 0
+            annualBillWithSolar = annualBillWithSolar,
+            solarSystemCost = solarSystemCost,
+            totalCost20YearsWithSolar = totalCost20YearsWithSolar,
+            annualOperationalSavings = annualOperationalSavings,
+            breakEvenYears = breakEvenYears,
+            netSavings20Years = netSavings20Years,
+            isProfitable = netSavings20Years > 0
         )
     }
 }
