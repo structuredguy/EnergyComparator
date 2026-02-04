@@ -50,3 +50,4 @@ object EnergyCalculator {
         return peakSunHours * 365 * systemSizeKw * systemEfficiency
     }
 }
+

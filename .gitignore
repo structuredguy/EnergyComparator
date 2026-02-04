@@ -30,3 +30,4 @@ replay_pid*
 *.gitignore#
 *.gitignore
 /.gradle
+/build/reports
