@@ -1,47 +1,64 @@
 package com.example.energycomparator
 
 import org.junit.Test
-import kotlin.math.abs
+import org.junit.Assert.*
 
 class EnergyCalculatorTest {
 
+    // --- TEST SCREEN 1: PROVIDER CALCULATOR ---
     @Test
-    fun testSolarInvestmentDecision() {
-        println("--- 20-YEAR LIFETIME ANALYSIS (Capex: €5,000) ---")
+    fun testScreen1_ProviderRanking() {
+        println("--- SCREEN 1 TEST: Provider Ranking ---")
         val yearlyUsage = 3600.0 // 300 kWh/month
 
-        // CASE 1: TENERIFE
-        printReport(EnergyCalculator.calculateInvestmentLogic(yearlyUsage, 28.4, "Tenerife"))
+        // Action: Get sorted list
+        val results = EnergyCalculator.getProvidersSortedByYearlyCost(yearlyUsage)
+        val bestOption = results.first()
 
-        println("\n------------------------------------------------\n")
+        // Verify Output
+        println("Input: $yearlyUsage kWh/year")
+        println("Best Provider: ${bestOption.first.name} at €%.2f/year".format(bestOption.second))
 
-        // CASE 2: LONDON
-        printReport(EnergyCalculator.calculateInvestmentLogic(yearlyUsage, 51.5, "London"))
+        // Assertions (Logic Checks)
+        // 1. Ensure list is actually sorted (Cost A < Cost B)
+        assertTrue(results[0].second < results[1].second)
+
+        // 2. Manual Math Check for 'BudgetEnergy' (0.13/kWh + 20.00/mo)
+        // (3600 * 0.13) + (20 * 12) = 468 + 240 = 708.0
+        // Let's verify if the code gets it right
+        val budgetEnergyQuote = results.find { it.first.name == "BudgetEnergy" }
+        assertEquals(708.0, budgetEnergyQuote?.second!!, 0.01)
+
+        println("✅ Screen 1 Logic Verified")
     }
 
-    private fun printReport(report: SolarInvestmentReport) {
-        println("📍 REPORT FOR: ${report.location}")
+    // --- TEST SCREEN 2: SOLAR CALCULATOR ---
+    @Test
+    fun testScreen2_SolarBreakEven() {
+        println("\n--- SCREEN 2 TEST: Solar Break-Even ---")
+        val yearlyUsage = 3600.0
 
-        println("1. BILLS:")
-        println("   - Without Solar: €%.2f /year".format(report.annualBillNoSolar))
-        println("   - With Solar:    €%.2f /year".format(report.annualBillWithSolar))
-        println("   - Annual Saving: €%.2f /year".format(report.annualOperationalSavings))
+        // Setup: Assume user picked "BudgetEnergy" from Screen 1
+        val selectedProvider = EnergyProvider("BudgetEnergy", "No Frills", 0.13, 20.00)
 
-        println("2. RETURN ON INVESTMENT:")
-        if (report.breakEvenYears < 20) {
-            println("   ✅ BREAK-EVEN: Year %.1f".format(report.breakEvenYears))
-        } else {
-            println("   ❌ NEVER breaks even (within 20 years)")
-        }
+        // CASE A: Tenerife (High Sun)
+        val yearsTenerife = EnergyCalculator.calculateSolarBreakEven(yearlyUsage, 28.4, selectedProvider)
+        println("📍 Tenerife (Lat 28.4): Break-even in %.1f years".format(yearsTenerife))
 
-        println("3. 20-YEAR TOTALS:")
-        println("   - Cost NO Solar:   €%.2f".format(report.totalCost20YearsNoSolar))
-        println("   - Cost WITH Solar: €%.2f".format(report.totalCost20YearsWithSolar))
+        // CASE B: London (Low Sun)
+        val yearsLondon = EnergyCalculator.calculateSolarBreakEven(yearlyUsage, 51.5, selectedProvider)
+        println("📍 London (Lat 51.5):   Break-even in %.1f years".format(yearsLondon))
 
-        if (report.isProfitable) {
-            println("   🎉 TOTAL PROFIT:   €%.2f".format(report.netSavings20Years))
-        } else {
-            println("   Warning: You lose €%.2f over 20 years".format(abs(report.netSavings20Years)))
-        }
+        // Assertions
+        // Tenerife should pay off FASTER than London
+        assertTrue("Tenerife should be faster than London", yearsTenerife < yearsLondon)
+
+        // Tenerife (approx 4800kWh solar vs 3600 usage) means 0 energy cost.
+        // Savings = OldEnergyCost (3600*0.13 = €468).
+        // Investment = 5000.
+        // Expected Years = 5000 / 468 = ~10.6 years.
+        assertEquals(10.68, yearsTenerife, 0.5) // allowing small margin for float math
+
+        println("✅ Screen 2 Logic Verified")
     }
 }

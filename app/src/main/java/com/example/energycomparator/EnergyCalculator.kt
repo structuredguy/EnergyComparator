@@ -1,34 +1,13 @@
 package com.example.energycomparator
 
 import kotlin.math.abs
-import kotlin.math.ceil
 
 // 1. DATA MODELS
 data class EnergyProvider(
     val name: String,
     val tariffName: String,
     val pricePerKwh: Double,
-    val standingCharge: Double
-)
-
-data class SolarInvestmentReport(
-    val location: String,
-    // Scenario A: No Solar
-    val bestProviderNoSolar: EnergyProvider,
-    val annualBillNoSolar: Double,
-    val totalCost20YearsNoSolar: Double, // The "Do Nothing" cost
-
-    // Scenario B: Solar
-    val bestProviderWithSolar: EnergyProvider,
-    val annualBillWithSolar: Double,     // The reduced utility bill
-    val solarSystemCost: Double,         // Fixed €5,000
-    val totalCost20YearsWithSolar: Double, // (Bill * 20) + €5,000
-
-    // The Verdict
-    val annualOperationalSavings: Double, // How much lower the bill is per year
-    val breakEvenYears: Double,           // When do you get your money back?
-    val netSavings20Years: Double,        // Final profit after 20 years
-    val isProfitable: Boolean             // True if you break even before year 20
+    val monthlyStandingCharge: Double // Explicitly named "Monthly" to avoid math errors
 )
 
 // 2. LOGIC SINGLETON
@@ -41,74 +20,58 @@ object EnergyCalculator {
         EnergyProvider("BudgetEnergy", "No Frills", 0.13, 20.00)
     )
 
-    fun getCheapestQuotes(usageKwh: Double): List<Pair<EnergyProvider, Double>> {
+    // --- SCREEN 1 LOGIC: CALCULATOR ---
+    // Input: Yearly Usage -> Output: List of Providers with YEARLY cost
+    fun getProvidersSortedByYearlyCost(yearlyUsageKwh: Double): List<Pair<EnergyProvider, Double>> {
         return allProviders.map { provider ->
-            val totalCost = (usageKwh * provider.pricePerKwh) + provider.standingCharge
-            provider to totalCost
-        }.sortedBy { it.second }
+            // Math: (YearlyKwh * Rate) + (12 * MonthlyCharge)
+            val energyCost = yearlyUsageKwh * provider.pricePerKwh
+            val fixedCost = provider.monthlyStandingCharge * 12
+            val totalYearlyCost = energyCost + fixedCost
+
+            provider to totalYearlyCost
+        }.sortedBy { it.second } // Cheapest first
     }
 
-    fun calculateAnnualSolarKwh(latitude: Double, systemSizeKw: Double = 3.0): Double {
+    // --- SCREEN 2 LOGIC: SOLAR BREAK-EVEN ---
+    // Input: Usage, Lat, and the Provider selected in Screen 1
+    fun calculateSolarBreakEven(
+        yearlyUsageKwh: Double,
+        latitude: Double,
+        provider: EnergyProvider
+    ): Double {
+        val solarCost = 5000.0
+
+        // 1. Calculate Bill WITHOUT Solar (Status Quo)
+        val oldEnergyCost = yearlyUsageKwh * provider.pricePerKwh
+        val fixedCost = provider.monthlyStandingCharge * 12
+        val oldBillYearly = oldEnergyCost + fixedCost
+
+        // 2. Calculate Solar Production
         val peakSunHours = when (abs(latitude)) {
             in 0.0..25.0 -> 5.5
             in 25.1..45.0 -> 4.5
             in 45.1..60.0 -> 3.0
             else -> 2.0
         }
-        val systemEfficiency = 0.8
-        return peakSunHours * 365 * systemSizeKw * systemEfficiency
-    }
+        // Formula: PSH * 365 * 3kW system * 0.8 efficiency
+        val annualSolarGeneration = peakSunHours * 365 * 3.0 * 0.8
 
-    // NEW: 20-Year Horizon Logic
-    fun calculateInvestmentLogic(
-        usageKwhPerYear: Double,
-        latitude: Double,
-        locationName: String
-    ): SolarInvestmentReport {
+        // 3. Calculate Bill WITH Solar
+        // Net usage cannot be less than 0
+        val newNetUsage = (yearlyUsageKwh - annualSolarGeneration).coerceAtLeast(0.0)
 
-        // 1. SCENARIO A: DO NOTHING (Grid only)
-        val avgMonthlyUsage = usageKwhPerYear / 12
-        val bestNoSolarQuote = getCheapestQuotes(avgMonthlyUsage).first()
-        val annualBillNoSolar = bestNoSolarQuote.second * 12
-        val totalCost20YearsNoSolar = annualBillNoSolar * 20
+        val newEnergyCost = newNetUsage * provider.pricePerKwh
+        // Standing charge remains the same (you are still connected to grid)
+        val newBillYearly = newEnergyCost + fixedCost
 
-        // 2. SCENARIO B: BUY SOLAR (€5,000)
-        val annualProduction = calculateAnnualSolarKwh(latitude)
-        val monthlyProduction = annualProduction / 12
-        val netMonthlyUsage = (avgMonthlyUsage - monthlyProduction).coerceAtLeast(0.0)
+        // 4. Calculate Break-Even
+        val annualSavings = oldBillYearly - newBillYearly
 
-        val bestWithSolarQuote = getCheapestQuotes(netMonthlyUsage).first()
-        val annualBillWithSolar = bestWithSolarQuote.second * 12
-
-        val solarSystemCost = 5000.0
-        // Total cost = The panels + 20 years of reduced bills
-        val totalCost20YearsWithSolar = solarSystemCost + (annualBillWithSolar * 20)
-
-        // 3. ANALYSIS
-        val annualOperationalSavings = annualBillNoSolar - annualBillWithSolar
-
-        // Avoid division by zero if savings are 0 or negative
-        val breakEvenYears = if (annualOperationalSavings > 0) {
-            solarSystemCost / annualOperationalSavings
+        return if (annualSavings > 0) {
+            solarCost / annualSavings
         } else {
-            999.0 // Never breaks even
+            999.0 // Impossible (infinite years)
         }
-
-        val netSavings20Years = totalCost20YearsNoSolar - totalCost20YearsWithSolar
-
-        return SolarInvestmentReport(
-            location = locationName,
-            bestProviderNoSolar = bestNoSolarQuote.first,
-            annualBillNoSolar = annualBillNoSolar,
-            totalCost20YearsNoSolar = totalCost20YearsNoSolar,
-            bestProviderWithSolar = bestWithSolarQuote.first,
-            annualBillWithSolar = annualBillWithSolar,
-            solarSystemCost = solarSystemCost,
-            totalCost20YearsWithSolar = totalCost20YearsWithSolar,
-            annualOperationalSavings = annualOperationalSavings,
-            breakEvenYears = breakEvenYears,
-            netSavings20Years = netSavings20Years,
-            isProfitable = netSavings20Years > 0
-        )
     }
 }
