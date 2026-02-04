@@ -1,5 +1,7 @@
 package com.example.energycomparator
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -7,7 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -18,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
@@ -25,9 +28,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 // --- COLORS ---
-val SolarOrange = Color(0xFFF57C00) // The "Action" color
-val ChartBarColor = Color(0xFF4CAF50) // Green for the bars
-val BackgroundColor = Color(0xFFFAFAFA) // Very light grey background
+val SolarOrange = Color(0xFFF57C00)
+val BackgroundColor = Color(0xFFFAFAFA)
+val RankBest = Color(0xFF43A047)   // Green
+val RankMid = Color(0xFFFFB300)    // Amber
+val RankWorst = Color(0xFFE53935)  // Red
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,8 +45,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun EnergyApp() {
+    // Navigation State
     var currentScreen by remember { mutableStateOf("screen1") }
+
+    // Data State (Held here to persist between screens)
     var yearlyUsageInput by remember { mutableStateOf("3600") }
+    var solarBudgetInput by remember { mutableStateOf("5000") }
+    var latitudeInput by remember { mutableStateOf("28.4") }
     var selectedProvider by remember { mutableStateOf<EnergyProvider?>(null) }
 
     MaterialTheme(
@@ -54,19 +64,24 @@ fun EnergyApp() {
             when (currentScreen) {
                 "screen1" -> {
                     ProviderListScreen(
-                        initialUsage = yearlyUsageInput,
-                        onUsageChanged = { yearlyUsageInput = it },
-                        onProviderSelected = { provider ->
-                            selectedProvider = provider
-                            currentScreen = "screen2"
-                        }
+                        yearlyUsage = yearlyUsageInput,
+                        solarBudget = solarBudgetInput,
+                        latitude = latitudeInput,
+                        selectedProvider = selectedProvider,
+                        onUsageChange = { yearlyUsageInput = it },
+                        onBudgetChange = { solarBudgetInput = it },
+                        onLatitudeChange = { latitudeInput = it },
+                        onProviderSelect = { selectedProvider = it },
+                        onNavigateNext = { currentScreen = "screen2" }
                     )
                 }
                 "screen2" -> {
                     if (selectedProvider != null) {
-                        SolarCalculatorScreen(
+                        SolarResultScreen(
                             provider = selectedProvider!!,
                             yearlyUsage = yearlyUsageInput.toDoubleOrNull() ?: 0.0,
+                            solarBudget = solarBudgetInput.toDoubleOrNull() ?: 5000.0,
+                            latitude = latitudeInput.toDoubleOrNull() ?: 28.4,
                             onBack = { currentScreen = "screen1" }
                         )
                     }
@@ -76,269 +91,355 @@ fun EnergyApp() {
     }
 }
 
+// --- SHARED FOOTER ---
+@Composable
+fun AppFooter() {
+    val context = LocalContext.current
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 24.dp, bottom = 16.dp)
+            .clickable {
+                val intent = Intent(Intent.ACTION_SENDTO).apply {
+                    data = Uri.parse("mailto:structuredguy@gmail.com")
+                }
+                try { context.startActivity(intent) } catch (e: Exception) {}
+            }
+    ) {
+        Divider(color = Color.LightGray, thickness = 0.5.dp, modifier = Modifier.padding(bottom = 8.dp))
+        Text("Contact the developer: structuredguy@gmail.com", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+        Text("Credits to Gemini", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+    }
+}
+
 // ------------------------------------------------------------------------
-// SCREEN 1: PROVIDER CALCULATOR (With Bar Chart)
+// SCREEN 1: PROVIDER SELECTION & PROJECT SETUP
 // ------------------------------------------------------------------------
 @Composable
 fun ProviderListScreen(
-    initialUsage: String,
-    onUsageChanged: (String) -> Unit,
-    onProviderSelected: (EnergyProvider) -> Unit
+    yearlyUsage: String,
+    solarBudget: String,
+    latitude: String,
+    selectedProvider: EnergyProvider?,
+    onUsageChange: (String) -> Unit,
+    onBudgetChange: (String) -> Unit,
+    onLatitudeChange: (String) -> Unit,
+    onProviderSelect: (EnergyProvider) -> Unit,
+    onNavigateNext: () -> Unit
 ) {
-    // State to hold the list. If empty, we haven't searched yet.
     var resultList by remember { mutableStateOf(emptyList<Pair<EnergyProvider, Double>>()) }
+    var searchedUsage by remember { mutableStateOf("") }
 
-    Column(modifier = Modifier.padding(16.dp)) {
-        // HEADER
-        Text(
-            text = "⚡ Comparador de Energía",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.Black
-        )
-        Spacer(modifier = Modifier.height(24.dp))
+    // Use a LazyColumn for the whole screen so it scrolls if keyboard opens
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp)
+    ) {
+        // 1. HEADER & USAGE INPUT
+        item {
+            Text("⚡ Comparador de Energía", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(20.dp))
 
-        // INPUT SECTION
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(2.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                OutlinedTextField(
-                    value = initialUsage,
-                    onValueChange = onUsageChanged,
-                    label = { Text("Consumo Anual (kWh)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // THE "ACTION" BUTTON (Orange)
-                Button(
-                    onClick = {
-                        val usage = initialUsage.toDoubleOrNull() ?: 0.0
-                        resultList = EnergyCalculator.getProvidersSortedByYearlyCost(usage)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = SolarOrange),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("BUSCAR MEJOR TARIFA", fontWeight = FontWeight.Bold)
+            Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    OutlinedTextField(
+                        value = yearlyUsage,
+                        onValueChange = onUsageChange,
+                        label = { Text("Consumo Anual (kWh)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            val usage = yearlyUsage.toDoubleOrNull() ?: 0.0
+                            searchedUsage = yearlyUsage
+                            resultList = EnergyCalculator.getProvidersSortedByYearlyCost(usage)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = SolarOrange),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("BUSCAR TARIFA", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
+            Spacer(modifier = Modifier.height(24.dp))
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // OUTPUT SECTION: BAR CHART
+        // 2. PROVIDER LIST (Only if results exist)
         if (resultList.isNotEmpty()) {
-            Text("Resultados (Elige uno):", fontWeight = FontWeight.SemiBold, color = Color.Gray)
-            Spacer(modifier = Modifier.height(8.dp))
+            item {
+                Text(
+                    text = "Selecciona un proveedor:",
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.Gray
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
-            // Calculate max cost for relative bar width
             val maxCost = resultList.maxOf { it.second }
+            val itemCount = resultList.size
 
-            LazyColumn {
-                items(resultList) { (provider, annualCost) ->
-                    ProviderBarChartItem(
-                        provider = provider,
-                        cost = annualCost,
-                        maxCost = maxCost,
-                        onClick = { onProviderSelected(provider) }
+            itemsIndexed(resultList) { index, (provider, annualCost) ->
+                val barColor = when {
+                    index == 0 -> RankBest
+                    index == itemCount - 1 -> RankWorst
+                    else -> RankMid
+                }
+
+                SelectableProviderItem(
+                    provider = provider,
+                    cost = annualCost,
+                    maxCost = maxCost,
+                    barColor = barColor,
+                    isSelected = selectedProvider == provider,
+                    onSelect = { onProviderSelect(provider) }
+                )
+            }
+
+            // 3. SOLAR PROJECT INPUTS (Only appears after search)
+            item {
+                Spacer(modifier = Modifier.height(30.dp))
+                Divider()
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text("Configuración Solar", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // Solar Budget Input
+                    OutlinedTextField(
+                        value = solarBudget,
+                        onValueChange = onBudgetChange,
+                        label = { Text("Presupuesto Solar (€)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    // Latitude Input
+                    OutlinedTextField(
+                        value = latitude,
+                        onValueChange = onLatitudeChange,
+                        label = { Text("Latitud") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
                     )
                 }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // 4. ACTION BUTTON
+                Button(
+                    onClick = onNavigateNext,
+                    enabled = selectedProvider != null, // Only active if checkmark selected
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SolarOrange,
+                        disabledContainerColor = Color.LightGray
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("PROJECT EXPENSES ➔", fontWeight = FontWeight.Bold)
+                }
+
+                if (selectedProvider == null) {
+                    Text(
+                        " * Selecciona un proveedor arriba para continuar",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Red,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+
+                AppFooter()
             }
+        } else {
+            // Footer when no results yet
+            item { AppFooter() }
         }
     }
 }
 
 @Composable
-fun ProviderBarChartItem(
+fun SelectableProviderItem(
     provider: EnergyProvider,
     cost: Double,
     maxCost: Double,
-    onClick: () -> Unit
+    barColor: Color,
+    isSelected: Boolean,
+    onSelect: () -> Unit
 ) {
-    // Determine bar width relative to the screen width (max cost = 100% width)
     val widthFraction = (cost / maxCost).toFloat()
 
-    Column(
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp)
-            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp)
+            .clickable { onSelect() } // Click row to select
     ) {
-        // Label Row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text(text = provider.name, fontWeight = FontWeight.Bold)
-                Text(text = provider.tariffName, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        // THE CHECKMARK (Radio Button)
+        RadioButton(
+            selected = isSelected,
+            onClick = onSelect,
+            colors = RadioButtonDefaults.colors(selectedColor = SolarOrange)
+        )
+
+        // THE CHART
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(text = provider.name, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(text = provider.tariffName, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                }
+                Text(
+                    text = "€${cost.toInt()}",
+                    fontWeight = FontWeight.Bold,
+                    color = barColor
+                )
             }
-            Text(
-                text = "€${cost.toInt()}",
-                fontWeight = FontWeight.Bold,
-                color = if (cost == maxCost) Color.Black else ChartBarColor // Highlight cheapest in green logic later?
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(widthFraction)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(barColor)
             )
         }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        // The Bar
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(widthFraction)
-                .height(12.dp)
-                .clip(RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp))
-                .background(if (widthFraction < 0.99) ChartBarColor else Color.LightGray)
-            // Logic: If it's not the most expensive, make it Green. Expensive = Grey.
-        )
     }
 }
 
 // ------------------------------------------------------------------------
-// SCREEN 2: SOLAR SIMULATOR (Modern "Back" & Consistent Button)
+// SCREEN 2: PROJECT EXPENSES DASHBOARD (Result Only)
 // ------------------------------------------------------------------------
 @Composable
-fun SolarCalculatorScreen(
+fun SolarResultScreen(
     provider: EnergyProvider,
     yearlyUsage: Double,
+    solarBudget: Double,
+    latitude: Double,
     onBack: () -> Unit
 ) {
-    var latitude by remember { mutableStateOf("28.4") }
-    var breakEvenYears by remember { mutableStateOf(0.0) }
-    var hasCalculated by remember { mutableStateOf(false) }
+    // Perform Calculation immediately
+    // Note: We need a slight modification to the break-even logic to accept variable budget.
+    // Since EnergyCalculator logic is hidden in this file, I will replicate the simple math here
+    // or assume we use the standard logic and divide by the custom budget.
 
-    Column(modifier = Modifier.padding(16.dp)) {
+    // Standard logic from previous: (Cost / AnnualSavings)
+    // We calculate Annual Savings first.
 
-        // MODERN TOP BAR
+    val annualSolarKwh = EnergyCalculator.calculateAnnualSolarKwh(latitude, 3.0) // Assume 3kW system for now
+    val annualSavings = annualSolarKwh * provider.pricePerKwh
+
+    // Break Even = UserBudget / Savings
+    val breakEvenYears = if (annualSavings > 0) solarBudget / annualSavings else 999.0
+    val totalSavings20Years = (annualSavings * 20) - solarBudget
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+
+        // TOP BAR
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.Filled.ArrowBack, contentDescription = "Volver")
             }
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Simulador Solar", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("Project Expenses", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        // SUMMARY CARD
+        // 1. RECAP CARD
         Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)), // Light Blue for info
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(2.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text("Proveedor Actual", style = MaterialTheme.typography.labelSmall)
-                    Text(provider.name, fontWeight = FontWeight.Bold)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("Consumo", style = MaterialTheme.typography.labelSmall)
-                    Text("${yearlyUsage.toInt()} kWh", fontWeight = FontWeight.Bold)
-                }
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Resumen del Proyecto", fontWeight = FontWeight.Bold, color = SolarOrange)
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                RowResult("Proveedor", provider.name)
+                RowResult("Inversión (Presupuesto)", "€${solarBudget.toInt()}")
+                RowResult("Ubicación (Lat)", latitude.toString())
             }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // INPUT
-        Text("Ubicación", fontWeight = FontWeight.SemiBold)
+        // 2. THE BIG RESULT
+        Text("Resultados Financieros", fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
-            value = latitude,
-            onValueChange = { latitude = it },
-            label = { Text("Latitud (ej. 28.4)") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (breakEvenYears < 10) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+            ),
             modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // ACTION BUTTON (Consistent Orange)
-        Button(
-            onClick = {
-                val lat = latitude.toDoubleOrNull() ?: 0.0
-                breakEvenYears = EnergyCalculator.calculateSolarBreakEven(yearlyUsage, lat, provider)
-                hasCalculated = true
-            },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = SolarOrange),
-            shape = RoundedCornerShape(8.dp)
         ) {
-            Text("CALCULAR AMORTIZACIÓN", fontWeight = FontWeight.Bold)
-        }
+            Column(modifier = Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
 
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // RESULT OUTPUT
-        if (hasCalculated) {
-            Divider()
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text("RESULTADO FINAL", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (breakEvenYears < 20) {
-                Text(
-                    text = "✅ RENTABLE",
-                    fontSize = 24.sp, fontWeight = FontWeight.Black, color = Color(0xFF2E7D32)
-                )
-                Text(
-                    text = "Amortizado en %.1f años".format(breakEvenYears),
-                    fontSize = 18.sp
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("En 20 años habrás ahorrado miles de euros.", color = Color.Gray)
-            } else {
-                Text(
-                    text = "❌ NO RENTABLE",
-                    fontSize = 24.sp, fontWeight = FontWeight.Black, color = Color.Red
-                )
-                Text("Tardarías más de 20 años en recuperar la inversión.")
+                if (breakEvenYears < 20) {
+                    Text("✅ AMORTIZACIÓN", fontWeight = FontWeight.Bold, color = Color.Gray)
+                    Text(
+                        text = "%.1f Años".format(breakEvenYears),
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (breakEvenYears < 8) RankBest else RankMid
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Ahorro Neto (20 Años)", fontWeight = FontWeight.Bold, color = Color.Gray)
+                    Text(
+                        text = "+€${totalSavings20Years.toInt()}",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RankBest
+                    )
+                } else {
+                    Text("❌ NO RENTABLE", fontSize = 24.sp, fontWeight = FontWeight.Black, color = RankWorst)
+                    Text("El retorno de inversión supera los 20 años.")
+                }
             }
         }
+
+        Spacer(modifier = Modifier.weight(1f))
+        AppFooter()
+    }
+}
+
+@Composable
+fun RowResult(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, color = Color.Gray)
+        Text(value, fontWeight = FontWeight.SemiBold)
     }
 }
 
 // ------------------------------------------------------------------------
-// VISUAL PREVIEWS (The "PNGs")
+// PREVIEW
 // ------------------------------------------------------------------------
-
-@Preview(showBackground = true, name = "Screen 1: Output Chart")
+@Preview(showBackground = true, name = "Screen 1: Selection")
 @Composable
-fun PreviewScreen1_Output() {
-    // We create a specific component just for previewing the output state
+fun PreviewSelection() {
     val mockResults = listOf(
         EnergyProvider("BudgetEnergy", "No Frills", 0.13, 20.00) to 708.0,
-        EnergyProvider("Volt-Age", "Standard", 0.14, 15.00) to 750.0,
-        EnergyProvider("GreenSpark", "Eco", 0.18, 10.00) to 850.0
+        EnergyProvider("Volt-Age", "Standard", 0.14, 15.00) to 850.0
     )
-
     MaterialTheme {
-        Column(modifier = Modifier.padding(16.dp).background(Color.White)) {
-            Text("Resultados Mock (Visual Check):")
-            val max = mockResults.maxOf { it.second }
-            mockResults.forEach {
-                ProviderBarChartItem(it.first, it.second, max, {})
+        // We simulate a screen with results populated
+        LazyColumn(contentPadding = PaddingValues(16.dp)) {
+            itemsIndexed(mockResults) { index, (prov, cost) ->
+                SelectableProviderItem(prov, cost, 1000.0, RankBest, index == 0, {})
             }
         }
-    }
-}
-
-@Preview(showBackground = true, name = "Screen 2: Solar Result")
-@Composable
-fun PreviewScreen2_Output() {
-    MaterialTheme {
-        // We force the screen to look like calculation is done
-        val mockProvider = EnergyProvider("BudgetEnergy", "No Frills", 0.13, 20.00)
-        SolarCalculatorScreen(mockProvider, 3600.0, {})
-        // Note: The preview logic for 'hasCalculated' is internal state, 
-        // so to see the result in preview, you'd usually pass state in.
-        // For now, just trust the 'Run' or click the Interactive button in Preview!
     }
 }
