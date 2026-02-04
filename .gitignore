@@ -31,3 +31,4 @@ replay_pid*
 *.gitignore
 /.gradle
 /build/reports
+/images
